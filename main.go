@@ -106,6 +106,25 @@ type chartData struct {
 	Sigma   float64 `json:"sigma"`
 }
 
+/*
+	{
+		"date": "2016-02-09 09:20:00",
+		"id": "anomaly-01",
+		"lineAlpha": 0.5,
+		"lineColor": "#FF0000",
+		"lineThickness": 5
+	}
+*/
+type anomalyData struct {
+	ID        string  `json:"id"`
+	Date      string  `json:"date",omitempty`
+	Alpha     float64 `json:"lineAlpha",omitempty`
+	Color     string  `json:"lineColor"`
+	Thickness int64   `json:"lineThickness"`
+	Value     int64   `json:"value",omitempty`
+	Axis      string  `json:"valueAxis",omitempty`
+}
+
 func main() {
 	port := "80"
 	if os.Getenv("PORT") != "" {
@@ -135,7 +154,7 @@ func main() {
 		}
 
 		result := bytes.NewBufferString(htmlHeader)
-		chart, err := detectAnomalyes(start, end, m, period)
+		chart, _, err := detectAnomalyes(start, end, m, period)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to detect: %v", err), http.StatusInternalServerError)
 		}
@@ -163,7 +182,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-func detectAnomalyes(start, end, m string, period int) ([]chartData, error) {
+func detectAnomalyes(start, end, m string, period int) ([]chartData, []anomalyData, error) {
 	path := url.Values{}
 	// path.Add("start", "2016/02/09-08:00:00")
 	// path.Add("end", "2016/02/09-11:00:00")
@@ -174,12 +193,12 @@ func detectAnomalyes(start, end, m string, period int) ([]chartData, error) {
 
 	resp, err := http.Get(fmt.Sprintf("%s/api/query/?%s", tsdbHost, path.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get data from TSDB: %v", err)
+		return nil, nil, fmt.Errorf("failed to get data from TSDB: %v", err)
 	}
 
 	var data []tsdbResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to decode TSDB response: %v", err)
+		return nil, nil, fmt.Errorf("failed to decode TSDB response: %v", err)
 	}
 
 	dps := make(DataPoints, 0)
@@ -202,6 +221,9 @@ func detectAnomalyes(start, end, m string, period int) ([]chartData, error) {
 	vals := make([]float64, period)
 
 	chart := make([]chartData, 0)
+	anomalyes := make([]anomalyData, 0)
+
+	loc, _ := time.LoadLocation("Asia/Novosibirsk")
 	for idx, cdp := range dps {
 		if idx <= period {
 			continue
@@ -213,20 +235,28 @@ func detectAnomalyes(start, end, m string, period int) ([]chartData, error) {
 
 		movingAverage = average(vals)
 		sigma = div3Sigma(vals)
-		// if sigma > 1 || sigma < -1 {
-		// 	fmt.Printf("Panic! %v", cdp)
-		// }
+		anomalyIdx := 0
+		if sigma > 1.2 || sigma < -1.2 {
+			anomalyIdx++
+			anomalyes = append(anomalyes, anomalyData{
+				ID:        fmt.Sprintf("anomaly-%d", anomalyIdx),
+				Date:      cdp.Time.In(loc).Format("2006-01-02 15:04:05"),
+				Alpha:     0.5,
+				Color:     "#FF0000",
+				Thickness: 5,
+			})
+		}
 		//fmt.Printf("%v,%v,%v,%v\n", cdp.Time.Format("2006-01-02 15:04:05"), cdp.Value, movingAverage, sigma)
 
 		chart = append(chart, chartData{
-			cdp.Time.Format("2006-01-02 15:04:05"),
+			cdp.Time.In(loc).Format("2006-01-02 15:04:05"),
 			cdp.Value,
 			movingAverage,
 			sigma,
 		})
 	}
 
-	return chart, nil
+	return chart, anomalyes, nil
 }
 
 // Get the average of float64 values.
