@@ -113,7 +113,6 @@ func main() {
 		port = os.Getenv("PORT")
 	}
 
-	// Простой хендлер, который показывает хост и текущее время
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t := time.Now()
 
@@ -168,7 +167,6 @@ func main() {
 
 		fmt.Fprintf(w, tpl, string(anomalyesBytes), string(chartBytes))
 
-		// Ну и access.log для наглядности
 		log.Printf("%s %q %v\n", r.Method, r.URL.String(), time.Since(t))
 	})
 	log.Fatal(http.ListenAndServe(":"+port, nil))
@@ -226,9 +224,9 @@ func detectAnomalyes(start, end, m string, period int) ([]chartData, []anomalyDa
 		}
 
 		movingAverage = average(vals)
-		sigma = div3Sigma(vals)
+		sigma = test3Sigma(vals)
 		anomalyIdx := 0
-		if sigma > 1.2 || sigma < -1.2 {
+		if sigma > 1.2 {
 			anomalyIdx++
 			anomalyes = append(anomalyes, anomalyData{
 				ID:        fmt.Sprintf("anomaly-%d", anomalyIdx),
@@ -251,7 +249,6 @@ func detectAnomalyes(start, end, m string, period int) ([]chartData, []anomalyDa
 	return chart, anomalyes, nil
 }
 
-// Get the average of float64 values.
 func average(vals []float64) float64 {
 	var sum float64
 	for i := 0; i < len(vals); i++ {
@@ -262,7 +259,7 @@ func average(vals []float64) float64 {
 
 // Get the standard deviation of float64 values, with
 // an input average.
-func stdDev(vals []float64, avg float64) float64 {
+func stddev(vals []float64, avg float64) float64 {
 	var sum float64
 	for i := 0; i < len(vals); i++ {
 		dis := vals[i] - avg
@@ -295,23 +292,16 @@ func stdDev(vals []float64, avg float64) float64 {
 //
 // The following function will set the metric score and also the average.
 //
-func div3Sigma(vals []float64) float64 {
+func test3Sigma(vals []float64) float64 {
 	if len(vals) == 0 {
 		return 0
 	}
 
 	// Values average and standard deviation.
 	avg := average(vals)
-	std := stdDev(vals, avg)
+	std := stddev(vals, avg)
+	last := average(vals[len(vals)-3:])
 
-	// // Set metric score
-	// if len(vals) <= int(d.cfg.Detector.LeastCount) {
-	// 	// Values not enough.
-	// 	m.Score = 0
-	// 	return
-	// }
-
-	last := vals[len(vals)-1]
 	if std == 0 {
 		switch {
 		case last == avg:
@@ -324,5 +314,5 @@ func div3Sigma(vals []float64) float64 {
 		return 0
 	}
 	// 3-sigma
-	return (last - avg) / (3 * std)
+	return math.Abs(last-avg) / (3 * std)
 }
