@@ -5,7 +5,6 @@ package main
 
 // http://tsdb.kronos.d:4242/#start=2016/02/03-09:23:00&end=2016/02/10-09:23:58&m=mimmax:gauges.do.sphinx.lag&o=&yrange=%5B0:%5D&wxh=1380x636&style=linespoint
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,7 +19,7 @@ import (
 
 const tsdbHost = "http://tsdb.kronos.d:4242"
 
-const htmlHeader = `<!DOCTYPE html>
+const tpl = `<!DOCTYPE html>
 <html>
 	<head>
 		<title>chart</title>
@@ -41,22 +40,7 @@ const htmlHeader = `<!DOCTYPE html>
 					{"id": "average", "title": "Average", "valueField": "avg"},
 					{"id": "sigma", "title": "Sigma", "valueField": "sigma", "valueAxis": "ValueAxis-2"}
 				],
-				"guides": [
-					{
-						"id": "Guide-1",
-						"lineColor": "#CC0000",
-						"lineThickness": 4,
-						"value": 1,
-						"valueAxis": "ValueAxis-2"
-					},
-					{
-						"id": "Guide-2",
-						"lineColor": "#CC0000",
-						"lineThickness": 4,
-						"value": -1,
-						"valueAxis": "ValueAxis-2"
-					}
-				],
+				"guides": %s,
 				"valueAxes": [{
 					"id": "ValueAxis-1",
 					"title": "Values"
@@ -69,14 +53,12 @@ const htmlHeader = `<!DOCTYPE html>
 				"balloon": {},
 				"legend": { "enabled": true, "useGraphSettings": true },
 				"titles": [],
-				"dataProvider":
-`
-
-const htmlFooter = `			});
+				"dataProvider": %s
+			});
 		</script>
 	</head>
 	<body>
-		<div id="chartdiv" style="width: 100%; height: 400px; background-color: #FFFFFF;" ></div>
+		<div id="chartdiv" style="width: 100%%; height: 400px; background-color: #FFFFFF;" ></div>
 	</body>
 </html>
 `
@@ -153,28 +135,38 @@ func main() {
 			http.Error(w, fmt.Sprintf("Failed to atoi: %v", err), http.StatusInternalServerError)
 		}
 
-		result := bytes.NewBufferString(htmlHeader)
-		chart, _, err := detectAnomalyes(start, end, m, period)
+		chart, anomalyes, err := detectAnomalyes(start, end, m, period)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to detect: %v", err), http.StatusInternalServerError)
 		}
 
-		if err := json.NewEncoder(result).Encode(chart); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to encode: %v", err), http.StatusInternalServerError)
+		anomalyes = append(anomalyes, anomalyData{
+			ID:        "guide-1",
+			Color:     "#CC0000",
+			Thickness: 3,
+			Value:     1,
+			Axis:      "ValueAxis-2",
+		})
+
+		anomalyes = append(anomalyes, anomalyData{
+			ID:        "guide-1",
+			Color:     "#CC0000",
+			Thickness: 3,
+			Value:     -1,
+			Axis:      "ValueAxis-2",
+		})
+
+		chartBytes, err := json.Marshal(chart)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to Marshal: %v", err), http.StatusInternalServerError)
 		}
-		result.WriteString(htmlFooter)
 
-		/*
-			{
-				"date": "2016-02-09 09:20:00",
-				"id": "anomaly-01",
-				"lineAlpha": 0.5,
-				"lineColor": "#FF0000",
-				"lineThickness": 5
-			}
-		*/
+		anomalyesBytes, err := json.Marshal(anomalyes)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to Marshal: %v", err), http.StatusInternalServerError)
+		}
 
-		result.WriteTo(w)
+		fmt.Fprintf(w, tpl, string(anomalyesBytes), string(chartBytes))
 
 		// Ну и access.log для наглядности
 		log.Printf("%s %q %v\n", r.Method, r.URL.String(), time.Since(t))
@@ -305,7 +297,6 @@ func stdDev(vals []float64, avg float64) float64 {
 //
 func div3Sigma(vals []float64) float64 {
 	if len(vals) == 0 {
-		// Values empty.
 		return 0
 	}
 
