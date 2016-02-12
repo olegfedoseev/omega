@@ -1,9 +1,5 @@
 package main
 
-// http://tsdb.kronos.d:4242/#start=2016/02/09-08:00:00&end=2016/02/09-11:00:00&m=mimmax:php.timers.mongo.p95&o=&yrange=%5B0:%5D&wxh=1420x608&style=linespoint
-// http://tsdb.kronos.d:4242/api/query/?start=2016/02/09-08:00:00&end=2016/02/09-11:00:00&m=mimmax:php.timers.mongo.p95
-
-// http://tsdb.kronos.d:4242/#start=2016/02/03-09:23:00&end=2016/02/10-09:23:58&m=mimmax:gauges.do.sphinx.lag&o=&yrange=%5B0:%5D&wxh=1380x636&style=linespoint
 import (
 	"encoding/json"
 	"fmt"
@@ -172,39 +168,21 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-func detectAnomalyes(start, end, m string, period int) ([]chartData, []anomalyData, error) {
-	path := url.Values{}
-	// path.Add("start", "2016/02/09-08:00:00")
-	// path.Add("end", "2016/02/09-11:00:00")
-	// path.Add("m", "mimmax:php.timers.mongo.p95")
-	path.Add("start", start)
-	path.Add("end", end)
-	path.Add("m", m)
-
-	resp, err := http.Get(fmt.Sprintf("%s/api/query/?%s", tsdbHost, path.Encode()))
+func detectAnomalyes(start, end, metric string, period int) ([]chartData, []anomalyData, error) {
+	loc, _ := time.LoadLocation("Asia/Novosibirsk")
+	startTime, err := time.ParseInLocation("2006/01/02-15:04:05", start, loc)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get data from TSDB: %v", err)
+		return nil, nil, fmt.Errorf("failed to parse start date: %v", err)
+	}
+	endTime, err := time.ParseInLocation("2006/01/02-15:04:05", end, loc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse end date: %v", err)
 	}
 
-	var data []tsdbResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, nil, fmt.Errorf("failed to decode TSDB response: %v", err)
+	dps, err := getDataPoints(tsdbHost, metric, startTime, endTime)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get data from tsdb: %v", err)
 	}
-
-	dps := make(DataPoints, 0)
-	for ts, val := range data[0].DataPoints {
-		timestamp, err := strconv.Atoi(ts)
-		if err != nil {
-			continue
-		}
-		dp := DataPoint{
-			Time:  time.Unix(int64(timestamp), 0),
-			Value: val,
-		}
-		dps = append(dps, dp)
-	}
-
-	sort.Sort(dps)
 
 	var movingAverage float64
 	var sigma float64
@@ -213,7 +191,6 @@ func detectAnomalyes(start, end, m string, period int) ([]chartData, []anomalyDa
 	chart := make([]chartData, 0)
 	anomalyes := make([]anomalyData, 0)
 
-	loc, _ := time.LoadLocation("Asia/Novosibirsk")
 	for idx, cdp := range dps {
 		if idx <= period {
 			continue
@@ -315,4 +292,37 @@ func test3Sigma(vals []float64) float64 {
 	}
 	// 3-sigma
 	return math.Abs(last-avg) / (3 * std)
+}
+
+func getDataPoints(host, metric string, from, to time.Time) (DataPoints, error) {
+	path := url.Values{}
+	path.Set("start", from.Format("2006/01/02-15:04:05"))
+	path.Set("end", to.Format("2006/01/02-15:04:05"))
+	path.Set("m", metric)
+
+	response, err := http.Get(fmt.Sprintf("%s/api/query/?%s", host, path.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get data from TSDB: %v", err)
+	}
+
+	var data []tsdbResponse
+	if err := json.NewDecoder(response.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("failed to decode TSDB response: %v", err)
+	}
+
+	dps := make(DataPoints, 0)
+	for ts, val := range data[0].DataPoints {
+		timestamp, err := strconv.Atoi(ts)
+		if err != nil {
+			continue
+		}
+		dp := DataPoint{
+			Time:  time.Unix(int64(timestamp), 0),
+			Value: val,
+		}
+		dps = append(dps, dp)
+	}
+	sort.Sort(dps)
+
+	return dps, nil
 }
